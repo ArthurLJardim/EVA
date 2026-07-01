@@ -1,0 +1,9 @@
+beautifulsoup4==4.12.3
+google-api-python-client==2.149.0
+google-auth-oauthlib==1.2.1
+icalendar==6.0.1
+msal==1.31.1
+playwright>=1.56.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+pytest==8.3.3
