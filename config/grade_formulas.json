@@ -1,0 +1,137 @@
+{
+  "INTRODUÇÃO À PROGRAMAÇÃO": {
+    "units": [
+      {
+        "name": "N1",
+        "components": [
+          {
+            "key": "trabalho1",
+            "label": "Nota do Trabalho da Unidade 1",
+            "weight": 0.3,
+            "due_date": "2026-05-14"
+          },
+          {
+            "key": "aval1",
+            "label": "Nota da Avaliação 1 (Aval_1)",
+            "weight": 0.7,
+            "due_date": "2026-05-14"
+          }
+        ]
+      },
+      {
+        "name": "N2",
+        "components": [
+          {
+            "key": "trabalho2",
+            "label": "Nota do Trabalho da Unidade 2",
+            "weight": 0.3,
+            "due_date": "2026-07-15"
+          },
+          {
+            "key": "aval2",
+            "label": "Nota da Avaliação 2 (Aval_2)",
+            "weight": 0.7,
+            "due_date": "2026-07-15"
+          }
+        ]
+      }
+    ]
+  },
+  "FUNDAMENTOS DE LÓGICA PARA INTELIGÊNCIA ARTIFICIAL": {
+    "use_sigaa_unit_override": false,
+    "units": [
+      {
+        "name": "NF",
+        "components": [
+          {
+            "key": "aval1",
+            "label": "Nota da Avaliação 1",
+            "weight": 0.3,
+            "item_title_contains": "Avaliação 1"
+          },
+          {
+            "key": "aval2",
+            "label": "Nota da Avaliação 2",
+            "weight": 0.4,
+            "item_title_contains": "Avaliação 2"
+          },
+          {
+            "key": "aval3",
+            "label": "Nota da Avaliação 3",
+            "weight": 0.3,
+            "item_title_contains": "Avaliação 3"
+          }
+        ]
+      }
+    ]
+  },
+  "INTELIGÊNCIA ARTIFICIAL E SOCIEDADE": {
+    "use_sigaa_unit_override": false,
+    "units": [
+      {
+        "name": "NF",
+        "components": [
+          {
+            "key": "trabalho_final",
+            "label": "Nota do Trabalho Final (artigo de opinião, ate 5,0 pontos)",
+            "weight": 1.0
+          },
+          {
+            "key": "apresentacao",
+            "label": "Nota da Apresentacao Oral (ate 3,0 pontos)",
+            "weight": 1.0
+          },
+          {
+            "key": "participacao",
+            "label": "Nota de Trabalhos Secundarios e Participacao (ate 2,0 pontos)",
+            "weight": 1.0
+          }
+        ]
+      }
+    ]
+  },
+  "FUNDAMENTOS DE MATEMÁTICA PARA INTELIGÊNCIA ARTIFICAL": {
+    "use_sigaa_unit_override": false,
+    "units": [
+      {
+        "name": "NF",
+        "components": [
+          {
+            "key": "p1",
+            "label": "Nota da Prova 1 (Modulo 1)",
+            "weight": 0.12,
+            "due_date": "2026-04-27"
+          },
+          {
+            "key": "p2",
+            "label": "Nota da Prova 2 (Modulo 2)",
+            "weight": 0.15,
+            "due_date": "2026-05-19"
+          },
+          {
+            "key": "p3",
+            "label": "Nota da Prova 3 (Modulo 3)",
+            "weight": 0.15,
+            "due_date": "2026-06-16"
+          },
+          {
+            "key": "p4",
+            "label": "Nota da Prova 4 (Modulo 4)",
+            "weight": 0.18,
+            "due_date": "2026-07-13"
+          },
+          {
+            "key": "problemas_ia",
+            "label": "Nota dos Problemas de IA / atividades (ate 3,0 pontos)",
+            "weight": 1.0
+          },
+          {
+            "key": "frequencia",
+            "label": "Nota de Frequencia e Participacao (ate 1,0 ponto)",
+            "weight": 1.0
+          }
+        ]
+      }
+    ]
+  }
+}

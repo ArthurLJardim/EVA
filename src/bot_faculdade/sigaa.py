@@ -145,6 +145,54 @@ def _news_from_html(html: str, settings, url: str) -> list[AcademicNews]:
     return news
 
 
+def _app_root(settings) -> str:
+    base = settings.sigaa_url.rstrip("/")
+    return base if base.endswith("/sigaa") else f"{base}/sigaa"
+
+
+def _login(page, settings, manual_login: bool) -> None:
+    page.goto(settings.sigaa_url, wait_until="domcontentloaded")
+
+    if manual_login:
+        print("SIGAA: faca o login manualmente na janela do navegador.")
+        input("Depois que a pagina inicial do SIGAA abrir, pressione Enter aqui para continuar...")
+        page.wait_for_load_state("networkidle", timeout=20000)
+        return
+
+    login_selectors = [
+        'input[name="user.login"]',
+        'input[id="username"]',
+        'input[name="username"]',
+        'input[name="login"]',
+        'input[type="text"]',
+    ]
+    password_selectors = [
+        'input[name="user.senha"]',
+        'input[id="password"]',
+        'input[name="password"]',
+        'input[name="senha"]',
+        'input[type="password"]',
+    ]
+    for selector in login_selectors:
+        if page.locator(selector).count():
+            page.fill(selector, settings.sigaa_username)
+            break
+    for selector in password_selectors:
+        if page.locator(selector).count():
+            page.fill(selector, settings.sigaa_password)
+            break
+
+    submit = page.locator(
+        'input[type="submit"], button[type="submit"], input[value*="Entrar"], button:has-text("Entrar"), a:has-text("Entrar")'
+    )
+    if submit.count():
+        submit.first.click()
+        page.wait_for_load_state("networkidle", timeout=20000)
+    else:
+        page.keyboard.press("Enter")
+        page.wait_for_load_state("networkidle", timeout=20000)
+
+
 def fetch_sigaa_data(settings, debug_browser: bool = False) -> tuple[list[AcademicItem], list[AcademicNews]]:
     if not settings.sigaa_url or not settings.sigaa_username or not settings.sigaa_password:
         return [], []
@@ -153,48 +201,9 @@ def fetch_sigaa_data(settings, debug_browser: bool = False) -> tuple[list[Academ
         manual_login = settings.sigaa_manual_login or debug_browser
         browser = p.chromium.launch(headless=settings.sigaa_headless and not manual_login)
         page = browser.new_page()
-        page.goto(settings.sigaa_url, wait_until="domcontentloaded")
+        _login(page, settings, manual_login)
 
-        if manual_login:
-            print("SIGAA: faca o login manualmente na janela do navegador.")
-            input("Depois que a pagina inicial do SIGAA abrir, pressione Enter aqui para continuar...")
-            page.wait_for_load_state("networkidle", timeout=20000)
-        else:
-            login_selectors = [
-                'input[name="user.login"]',
-                'input[id="username"]',
-                'input[name="username"]',
-                'input[name="login"]',
-                'input[type="text"]',
-            ]
-            password_selectors = [
-                'input[name="user.senha"]',
-                'input[id="password"]',
-                'input[name="password"]',
-                'input[name="senha"]',
-                'input[type="password"]',
-            ]
-            for selector in login_selectors:
-                if page.locator(selector).count():
-                    page.fill(selector, settings.sigaa_username)
-                    break
-            for selector in password_selectors:
-                if page.locator(selector).count():
-                    page.fill(selector, settings.sigaa_password)
-                    break
-
-            submit = page.locator(
-                'input[type="submit"], button[type="submit"], input[value*="Entrar"], button:has-text("Entrar"), a:has-text("Entrar")'
-            )
-            if submit.count():
-                submit.first.click()
-                page.wait_for_load_state("networkidle", timeout=20000)
-            else:
-                page.keyboard.press("Enter")
-                page.wait_for_load_state("networkidle", timeout=20000)
-
-        base = settings.sigaa_url.rstrip("/")
-        app_root = base if base.endswith("/sigaa") else f"{base}/sigaa"
+        app_root = _app_root(settings)
         urls_to_try = [
             page.url,
             f"{app_root}/portais/discente/discente.jsf",
@@ -227,3 +236,151 @@ def fetch_sigaa_data(settings, debug_browser: bool = False) -> tuple[list[Academ
 def fetch_sigaa_items(settings, debug_browser: bool = False) -> list[AcademicItem]:
     items, _ = fetch_sigaa_data(settings, debug_browser=debug_browser)
     return items
+
+
+_COURSE_SWITCHER_PATTERN = re.compile(r"^[A-Z]{2,6}\d{3,5}\s*-\s*(.+?)\s*\(\d{4}\.\d\)$")
+
+
+def _click_link_by_text(page, text: str) -> bool:
+    link = page.locator("a", has_text=text).first
+    if link.count() == 0:
+        return False
+    onclick = link.get_attribute("onclick")
+    if onclick:
+        page.evaluate(f"(function(){{ {onclick} }})()")
+    else:
+        link.click(force=True)
+    page.wait_for_timeout(1500)
+    page.wait_for_load_state("networkidle", timeout=20000)
+    return True
+
+
+def _to_float(text: str) -> float | None:
+    cleaned = text.strip().replace(",", ".")
+    if not cleaned or cleaned in {"-", "--"}:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_boletim_html(html: str) -> dict | None:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.select_one("div.notas table.tabelaRelatorio") or soup.select_one("table.tabelaRelatorio")
+    if not table:
+        return None
+    headers = [th.get_text(strip=True) for th in table.select("thead th")]
+    rows = table.select("tbody tr")
+    if not rows:
+        return None
+    cells = rows[0].find_all("td")
+    if len(cells) != len(headers):
+        return None
+
+    unidades: dict[str, float | None] = {}
+    resultado = None
+    situacao = None
+    for header, cell in zip(headers, cells):
+        text = cell.get_text(" ", strip=True)
+        if header.lower().startswith("unid"):
+            unidades[header] = _to_float(text)
+        elif header.lower().startswith("resultado"):
+            resultado = _to_float(text)
+        elif header.lower().startswith("sit"):
+            situacao = text
+
+    return {"unidades": unidades, "resultado": resultado, "situacao": situacao}
+
+
+def _parse_frequencia_html(html: str) -> dict | None:
+    soup = BeautifulSoup(html, "html.parser")
+    legend = soup.find("legend", string=re.compile("Mapa de Freq", re.I))
+    if not legend:
+        return None
+    fieldset = legend.find_parent("fieldset")
+    if not fieldset:
+        return None
+    text = fieldset.get_text("\n", strip=True)
+    faltas_match = re.search(r"Total de Faltas:\s*(\d+)", text, re.I)
+    max_match = re.search(r"M.ximo de Faltas Permitido:\s*(\d+)", text, re.I)
+    if not faltas_match:
+        return None
+    return {
+        "faltas": int(faltas_match.group(1)),
+        "max_faltas": int(max_match.group(1)) if max_match else None,
+    }
+
+
+def fetch_boletim_data(settings, debug_browser: bool = False) -> list[dict]:
+    if not settings.sigaa_url or not settings.sigaa_username or not settings.sigaa_password:
+        return []
+
+    results: list[dict] = []
+    with sync_playwright() as p:
+        manual_login = settings.sigaa_manual_login or debug_browser
+        browser = p.chromium.launch(headless=settings.sigaa_headless and not manual_login)
+        page = browser.new_page()
+        _login(page, settings, manual_login)
+
+        app_root = _app_root(settings)
+        try:
+            page.goto(f"{app_root}/portais/discente/discente.jsf", wait_until="networkidle", timeout=20000)
+        except Exception:
+            browser.close()
+            return []
+
+        first_course_link = page.locator("#atualizacoes-turma a").first
+        if first_course_link.count() == 0:
+            browser.close()
+            return []
+        onclick = first_course_link.get_attribute("onclick")
+        if onclick:
+            page.evaluate(f"(function(){{ {onclick} }})()")
+        else:
+            first_course_link.click(force=True)
+        page.wait_for_timeout(1500)
+        page.wait_for_load_state("networkidle", timeout=20000)
+
+        switcher_texts: list[str] = []
+        for link in page.locator("a").all():
+            try:
+                text = link.inner_text(timeout=300).strip()
+            except Exception:
+                continue
+            if _COURSE_SWITCHER_PATTERN.match(text):
+                switcher_texts.append(text)
+        switcher_texts = list(dict.fromkeys(switcher_texts))
+
+        for switcher_text in switcher_texts:
+            course_name = _COURSE_SWITCHER_PATTERN.match(switcher_text).group(1).strip()
+            result = {
+                "course": course_name,
+                "unidades": {},
+                "resultado": None,
+                "situacao": None,
+                "faltas": None,
+                "max_faltas": None,
+            }
+            try:
+                if not _click_link_by_text(page, switcher_text):
+                    continue
+                if _click_link_by_text(page, "Ver Notas"):
+                    parsed = _parse_boletim_html(page.content())
+                    if parsed:
+                        result.update(parsed)
+                    page.go_back()
+                    page.wait_for_load_state("networkidle", timeout=20000)
+                if _click_link_by_text(page, "Frequência"):
+                    freq = _parse_frequencia_html(page.content())
+                    if freq:
+                        result["faltas"] = freq["faltas"]
+                        result["max_faltas"] = freq["max_faltas"]
+                    page.go_back()
+                    page.wait_for_load_state("networkidle", timeout=20000)
+                results.append(result)
+            except Exception:
+                continue
+
+        browser.close()
+    return results

@@ -10,17 +10,24 @@ from .classroom import authorize_classroom, fetch_classroom_data
 from .config import load_settings
 from .dashboard import render_dashboard
 from .email_reader import fetch_email_data
+from .grades import apply_boletim_results, load_grade_configs
 from .ics_exporter import export_ics
 from .materials import archive_exam_materials
 from .notifier import (
     send_change_notifications,
     send_daily_summary,
+    send_grade_followups,
+    send_grade_requests,
+    send_link_questions,
     send_materials_archived_notification,
     send_pending_news_notifications,
     send_pending_notifications,
     send_urgent_notifications,
+    send_weekly_report,
+    process_grade_replies,
+    process_link_replies,
 )
-from .sigaa import fetch_sigaa_data
+from .sigaa import fetch_boletim_data, fetch_sigaa_data
 from .storage import Storage
 
 
@@ -30,6 +37,14 @@ def _safe_fetch(label, fetch_fn):
     except Exception as exc:
         print(f"{label}: falhou ({exc}). Pulando esta fonte nesta execucao.", flush=True)
         return [], []
+
+
+def _safe_call(label, fetch_fn, default):
+    try:
+        return fetch_fn()
+    except Exception as exc:
+        print(f"{label}: falhou ({exc}). Pulando esta etapa nesta execucao.", flush=True)
+        return default
 
 
 def sync(args) -> None:
@@ -74,7 +89,11 @@ def sync(args) -> None:
     export_ics(settings, rows)
     render_dashboard(settings, storage)
     print("Sincronizando calendario...", flush=True)
-    synced = sync_calendars(settings, rows, storage, removed_rows)
+    synced = _safe_call(
+        "Sincronizacao de calendario",
+        lambda: sync_calendars(settings, rows, storage, removed_rows),
+        {"outlook": 0, "google": 0, "outlook_deleted": 0, "google_deleted": 0},
+    )
     print("Enviando notificacoes...", flush=True)
     notified = send_pending_notifications(settings, storage) if args.notify else 0
     news_notified = send_pending_news_notifications(settings, storage) if args.notify else 0
@@ -88,6 +107,23 @@ def sync(args) -> None:
     materials_notified = (
         1 if args.notify and send_materials_archived_notification(settings, archived_materials) else 0
     )
+
+    grades_answered = 0
+    grade_requests_sent = 0
+    grade_followups_sent = 0
+    links_answered = 0
+    link_questions_sent = 0
+    if not args.skip_grades:
+        print("Verificando boletim (notas e faltas) no SIGAA...", flush=True)
+        boletim_results = _safe_call("Boletim SIGAA", lambda: fetch_boletim_data(settings), [])
+        configs = load_grade_configs(settings.grade_formulas_path)
+        apply_boletim_results(storage, configs, boletim_results)
+        links_answered = process_link_replies(settings, storage)
+        grades_answered = process_grade_replies(settings, storage)
+        if args.notify:
+            link_questions_sent = send_link_questions(settings, storage, item_result["new_items"])
+            grade_requests_sent = send_grade_requests(settings, storage)
+            grade_followups_sent = send_grade_followups(settings, storage)
 
     print(f"Itens encontrados nesta execucao: {len(items)}")
     print(f"Itens novos: {item_result['new']}")
@@ -107,6 +143,11 @@ def sync(args) -> None:
     print(f"Avisos urgentes enviados: {urgent_notified}")
     print(f"Materiais de prova arquivados: {len(archived_materials)}")
     print(f"Avisos de materiais enviados: {materials_notified}")
+    print(f"Respostas de notas processadas: {grades_answered}")
+    print(f"Pedidos de nota enviados: {grade_requests_sent}")
+    print(f"Lembretes de nota enviados: {grade_followups_sent}")
+    print(f"Respostas de vinculo processadas: {links_answered}")
+    print(f"Perguntas de vinculo enviadas: {link_questions_sent}")
 
 
 def list_items(args) -> None:
@@ -184,6 +225,36 @@ def summary(args) -> None:
     print(f"Resumo diario enviado: {'sim' if sent else 'nao'}")
 
 
+def whatsapp_test(args) -> None:
+    from .channels import send_whatsapp
+
+    settings = load_settings()
+    missing = [
+        name
+        for name, value in (
+            ("WHATSAPP_API_TOKEN", settings.whatsapp_api_token),
+            ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
+            ("WHATSAPP_TO", settings.whatsapp_to),
+            ("WHATSAPP_TEMPLATE_NAME", settings.whatsapp_template_name),
+        )
+        if not value
+    ]
+    if missing:
+        print(f"WhatsApp nao configurado. Faltando no .env: {', '.join(missing)}")
+        return
+    ok = send_whatsapp(settings, "Teste do EVA: se voce recebeu esta mensagem, o WhatsApp esta funcionando")
+    print(f"Mensagem aceita pela API da Meta: {'sim' if ok else 'nao (veja o erro acima)'}")
+    if ok:
+        print("A API aceitar nao garante entrega: confira se a mensagem chegou no seu WhatsApp.")
+
+
+def weekly_report(args) -> None:
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    sent = send_weekly_report(settings, storage)
+    print(f"Resumo semanal enviado: {'sim' if sent else 'nao'}")
+
+
 def dashboard(args) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -214,6 +285,7 @@ def main() -> None:
     sync_parser.add_argument("--skip-email", action="store_true")
     sync_parser.add_argument("--skip-sigaa", action="store_true")
     sync_parser.add_argument("--skip-classroom", action="store_true")
+    sync_parser.add_argument("--skip-grades", action="store_true")
     sync_parser.add_argument("--only-sigaa", action="store_true")
     sync_parser.add_argument("--only-classroom", action="store_true")
     sync_parser.add_argument("--debug-browser", action="store_true")
@@ -253,6 +325,12 @@ def main() -> None:
 
     summary_parser = sub.add_parser("summary", help="Envia um resumo diario por e-mail/Telegram.")
     summary_parser.set_defaults(func=summary)
+
+    weekly_report_parser = sub.add_parser("weekly-report", help="Envia o resumo semanal de faltas e medias.")
+    weekly_report_parser.set_defaults(func=weekly_report)
+
+    whatsapp_test_parser = sub.add_parser("whatsapp-test", help="Envia uma mensagem de teste pelo WhatsApp.")
+    whatsapp_test_parser.set_defaults(func=whatsapp_test)
 
     dashboard_parser = sub.add_parser("dashboard", help="Gera o dashboard HTML local.")
     dashboard_parser.set_defaults(func=dashboard)

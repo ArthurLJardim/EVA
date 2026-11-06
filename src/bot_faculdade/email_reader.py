@@ -16,6 +16,12 @@ from .news import clean_title, is_relevant_news
 
 logger = logging.getLogger(__name__)
 
+_GRADE_TAG_PATTERN = re.compile(r"\[nota#(\d+)\]")
+_GRADE_VALUE_LINE = re.compile(r"^([a-zA-Z][a-zA-Z0-9_]*)\s*:\s*(\d+(?:[.,]\d+)?)")
+_QUOTE_PREFIX = re.compile(r"^[>\s]+")
+_LINK_TAG_PATTERN = re.compile(r"\[vinculo#(\d+)\]")
+_LINK_VALUE_LINE = re.compile(r"^resposta\s*:\s*([a-zA-Z_][a-zA-Z0-9_]*)", re.I)
+
 
 def _decode(value: str | None) -> str:
     if not value:
@@ -124,3 +130,82 @@ def fetch_email_data(settings) -> tuple[list[AcademicItem], list[AcademicNews]]:
     except Exception:
         logger.exception("Falha ao ler e-mail academico via IMAP")
     return items, news
+
+
+def fetch_grade_replies(settings, open_request_ids: list[int]) -> dict[int, dict[str, float]]:
+    if not settings.email_imap_host or not settings.email_username or not settings.email_password:
+        return {}
+    if not open_request_ids:
+        return {}
+
+    wanted_ids = set(open_request_ids)
+    since = (datetime.now() - timedelta(days=settings.email_lookback_days)).strftime("%d-%b-%Y")
+    replies: dict[int, dict[str, float]] = {}
+    try:
+        with IMAP4_SSL(settings.email_imap_host, settings.email_imap_port) as imap:
+            imap.login(settings.email_username, settings.email_password)
+            imap.select(settings.email_folder)
+            _, data = imap.search(None, f'(SINCE "{since}")')
+            ids = data[0].split()
+            for msg_id in ids:
+                _, msg_data = imap.fetch(msg_id, "(RFC822)")
+                raw = msg_data[0][1]
+                message = message_from_bytes(raw)
+                subject = _decode(message.get("Subject"))
+                tag_match = _GRADE_TAG_PATTERN.search(subject)
+                if not tag_match:
+                    continue
+                request_id = int(tag_match.group(1))
+                if request_id not in wanted_ids:
+                    continue
+                body = _body(message)
+                values = {}
+                for raw_line in body.splitlines():
+                    line = _QUOTE_PREFIX.sub("", raw_line.strip())
+                    value_match = _GRADE_VALUE_LINE.match(line)
+                    if value_match:
+                        key = value_match.group(1).lower()
+                        values[key] = float(value_match.group(2).replace(",", "."))
+                if values:
+                    replies[request_id] = values
+    except Exception:
+        logger.exception("Falha ao ler respostas de notas via IMAP")
+    return replies
+
+
+def fetch_link_replies(settings, open_question_ids: list[int]) -> dict[int, str]:
+    if not settings.email_imap_host or not settings.email_username or not settings.email_password:
+        return {}
+    if not open_question_ids:
+        return {}
+
+    wanted_ids = set(open_question_ids)
+    since = (datetime.now() - timedelta(days=settings.email_lookback_days)).strftime("%d-%b-%Y")
+    replies: dict[int, str] = {}
+    try:
+        with IMAP4_SSL(settings.email_imap_host, settings.email_imap_port) as imap:
+            imap.login(settings.email_username, settings.email_password)
+            imap.select(settings.email_folder)
+            _, data = imap.search(None, f'(SINCE "{since}")')
+            ids = data[0].split()
+            for msg_id in ids:
+                _, msg_data = imap.fetch(msg_id, "(RFC822)")
+                raw = msg_data[0][1]
+                message = message_from_bytes(raw)
+                subject = _decode(message.get("Subject"))
+                tag_match = _LINK_TAG_PATTERN.search(subject)
+                if not tag_match:
+                    continue
+                question_id = int(tag_match.group(1))
+                if question_id not in wanted_ids:
+                    continue
+                body = _body(message)
+                for raw_line in body.splitlines():
+                    line = _QUOTE_PREFIX.sub("", raw_line.strip())
+                    value_match = _LINK_VALUE_LINE.match(line)
+                    if value_match:
+                        replies[question_id] = value_match.group(1).lower()
+                        break
+    except Exception:
+        logger.exception("Falha ao ler respostas de vinculo via IMAP")
+    return replies

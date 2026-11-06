@@ -95,6 +95,68 @@ class Storage:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS grade_components (
+                course TEXT NOT NULL,
+                component_key TEXT NOT NULL,
+                value REAL NOT NULL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (course, component_key)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_attendance (
+                course TEXT PRIMARY KEY,
+                faltas INTEGER NOT NULL DEFAULT 0,
+                max_faltas INTEGER,
+                situacao TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._add_column("course_attendance", "max_faltas", "INTEGER")
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS grade_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course TEXT NOT NULL,
+                component_keys TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TEXT NOT NULL,
+                followup_at TEXT,
+                answered_at TEXT
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS component_links (
+                course TEXT NOT NULL,
+                component_key TEXT NOT NULL,
+                item_uid TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (course, component_key)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS link_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course TEXT NOT NULL,
+                item_uid TEXT NOT NULL,
+                item_title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                asked_at TEXT NOT NULL,
+                answered_at TEXT,
+                UNIQUE(course, item_uid)
+            )
+            """
+        )
         self.conn.commit()
 
     def _add_column(self, table: str, column: str, definition: str) -> None:
@@ -462,4 +524,187 @@ class Storage:
                 ORDER BY academic_items.due_at ASC, study_materials.created_at DESC
                 """
             ).fetchall()
+        )
+
+    def set_grade_component(self, course: str, component_key: str, value: float, source: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO grade_components (course, component_key, value, source, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(course, component_key) DO UPDATE SET
+                value = excluded.value,
+                source = excluded.source,
+                updated_at = excluded.updated_at
+            """,
+            (course, component_key, value, source, datetime.now().astimezone().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_grade_values(self, course: str) -> dict[str, float]:
+        rows = self.conn.execute(
+            "SELECT component_key, value FROM grade_components WHERE course = ?",
+            (course,),
+        ).fetchall()
+        return {row["component_key"]: row["value"] for row in rows}
+
+    def set_course_attendance(self, course: str, faltas: int, situacao: str, max_faltas: int | None = None) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO course_attendance (course, faltas, max_faltas, situacao, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(course) DO UPDATE SET
+                faltas = excluded.faltas,
+                max_faltas = COALESCE(excluded.max_faltas, course_attendance.max_faltas),
+                situacao = excluded.situacao,
+                updated_at = excluded.updated_at
+            """,
+            (course, faltas, max_faltas, situacao, datetime.now().astimezone().isoformat()),
+        )
+        self.conn.commit()
+
+    def list_course_attendance(self) -> list[sqlite3.Row]:
+        return list(self.conn.execute("SELECT * FROM course_attendance ORDER BY course ASC").fetchall())
+
+    def list_current_course_attendance(self, stale_after_days: int = 7) -> list[sqlite3.Row]:
+        since = (datetime.now().astimezone() - timedelta(days=stale_after_days)).isoformat()
+        return list(
+            self.conn.execute(
+                "SELECT * FROM course_attendance WHERE updated_at >= ? ORDER BY course ASC",
+                (since,),
+            ).fetchall()
+        )
+
+    def create_grade_request(self, course: str, component_keys: list[str]) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO grade_requests (course, component_keys, status, requested_at)
+            VALUES (?, ?, 'pending', ?)
+            """,
+            (course, ",".join(component_keys), datetime.now().astimezone().isoformat()),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def open_grade_request_for_keys(self, course: str, component_keys: list[str]) -> sqlite3.Row | None:
+        rows = self.conn.execute(
+            "SELECT * FROM grade_requests WHERE course = ? AND status != 'answered'",
+            (course,),
+        ).fetchall()
+        wanted = set(component_keys)
+        for row in rows:
+            if wanted & set(row["component_keys"].split(",")):
+                return row
+        return None
+
+    def get_grade_request(self, request_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM grade_requests WHERE id = ?",
+            (request_id,),
+        ).fetchone()
+
+    def pending_grade_followups(self, followup_days_after: int) -> list[sqlite3.Row]:
+        limit = (datetime.now().astimezone() - timedelta(days=followup_days_after)).isoformat()
+        return list(
+            self.conn.execute(
+                """
+                SELECT * FROM grade_requests
+                WHERE status = 'pending' AND requested_at <= ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def mark_grade_request_followed_up(self, request_id: int) -> None:
+        self.conn.execute(
+            "UPDATE grade_requests SET status = 'followed_up', followup_at = ? WHERE id = ?",
+            (datetime.now().astimezone().isoformat(), request_id),
+        )
+        self.conn.commit()
+
+    def mark_grade_request_answered(self, request_id: int) -> None:
+        self.conn.execute(
+            "UPDATE grade_requests SET status = 'answered', answered_at = ? WHERE id = ?",
+            (datetime.now().astimezone().isoformat(), request_id),
+        )
+        self.conn.commit()
+
+    def find_item_due_at(self, course: str, title_contains: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT due_at FROM academic_items
+            WHERE course = ? AND title LIKE ?
+            ORDER BY due_at DESC LIMIT 1
+            """,
+            (course, f"%{title_contains}%"),
+        ).fetchone()
+        return row["due_at"] if row else None
+
+    def open_grade_requests(self) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute("SELECT * FROM grade_requests WHERE status != 'answered'").fetchall()
+        )
+
+    def get_component_link_due_at(self, course: str, component_key: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT academic_items.due_at FROM component_links
+            JOIN academic_items ON academic_items.uid = component_links.item_uid
+            WHERE component_links.course = ? AND component_links.component_key = ?
+            """,
+            (course, component_key),
+        ).fetchone()
+        return row["due_at"] if row else None
+
+    def create_component_link(self, course: str, component_key: str, item_uid: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO component_links (course, component_key, item_uid, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(course, component_key) DO UPDATE SET
+                item_uid = excluded.item_uid,
+                created_at = excluded.created_at
+            """,
+            (course, component_key, item_uid, datetime.now().astimezone().isoformat()),
+        )
+        self.conn.commit()
+
+    def open_link_question_for_item(self, course: str, item_uid: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM link_questions WHERE course = ? AND item_uid = ? AND status != 'answered'",
+            (course, item_uid),
+        ).fetchone()
+
+    def create_link_question(self, course: str, item_uid: str, item_title: str) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO link_questions (course, item_uid, item_title, status, asked_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            ON CONFLICT(course, item_uid) DO UPDATE SET
+                item_title = excluded.item_title
+            """,
+            (course, item_uid, item_title, datetime.now().astimezone().isoformat()),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT id FROM link_questions WHERE course = ? AND item_uid = ?",
+            (course, item_uid),
+        ).fetchone()
+        return row["id"]
+
+    def get_link_question(self, question_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM link_questions WHERE id = ?",
+            (question_id,),
+        ).fetchone()
+
+    def mark_link_question_answered(self, question_id: int) -> None:
+        self.conn.execute(
+            "UPDATE link_questions SET status = 'answered', answered_at = ? WHERE id = ?",
+            (datetime.now().astimezone().isoformat(), question_id),
+        )
+        self.conn.commit()
+
+    def open_link_questions(self) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute("SELECT * FROM link_questions WHERE status != 'answered'").fetchall()
         )

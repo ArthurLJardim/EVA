@@ -293,6 +293,82 @@ STUDY_MATERIAL_EXTENSIONS=.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip,.rar,.txt,.
 
 O bot registra cada arquivo no banco para nao baixar o mesmo anexo repetidas vezes. Ele nao apaga nem move mensagens do e-mail.
 
+## Faltas e media por materia
+
+A cada `sync`, o bot acessa o boletim de cada materia no SIGAA ("Ver Notas" dentro da Turma Virtual) e registra:
+
+- o total de **faltas** da materia;
+- as notas das unidades, **se o professor ja tiver lancado no SIGAA**.
+
+Toda sexta-feira as 08:00, ele envia um e-mail de resumo com faltas e media atual de cada materia (`python -m bot_faculdade weekly-report`).
+
+### Formula de calculo da media
+
+Como cada materia usa uma formula diferente (definida no plano de ensino), a formula de cada uma fica configurada em:
+
+```text
+config/grade_formulas.json
+```
+
+Cada materia define suas unidades (`N1`, `N2`, ...) e os componentes de cada unidade, com peso e (opcionalmente) a data da avaliacao:
+
+```json
+{
+  "NOME DA MATERIA": {
+    "units": [
+      {
+        "name": "N1",
+        "components": [
+          {"key": "trabalho1", "label": "Nota do Trabalho da Unidade 1", "weight": 0.3, "due_date": "2026-05-14"},
+          {"key": "aval1", "label": "Nota da Avaliacao 1", "weight": 0.7, "due_date": "2026-05-14"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+Para adicionar uma nova materia, mande o plano de ensino/slide com a formula de avaliacao para o Claude Code configurar essa entrada.
+
+### Quando a nota nao aparece no SIGAA
+
+Se `GRADE_REQUEST_DAYS_AFTER` dias (padrao `7`) se passarem apos a data da avaliacao e a nota continuar vazia no SIGAA, o bot manda um e-mail perguntando o valor. Para responder, basta preencher os campos indicados no corpo do e-mail, mantendo o formato `chave: valor` (ex: `aval1: 8.5`), e responder o e-mail.
+
+Se voce nao responder, ele manda **um lembrete** apos mais `GRADE_FOLLOWUP_DAYS_AFTER` dias (padrao `7`).
+
+### Quando a data de uma avaliacao nao esta na configuracao
+
+Algumas materias tem componentes (`trabalho_final`, `apresentacao`, etc.) sem uma data fixa no plano de ensino. Quando aparece uma atividade nova no SIGAA/Classroom para essas materias, o bot manda um e-mail perguntando a qual componente da formula ela corresponde. Responda com o formato:
+
+```text
+resposta: nome_do_componente
+```
+
+(ou `resposta: nenhum` se a atividade nao for nenhuma das notas da formula). A partir dai, o bot passa a saber a data automaticamente e usa o mesmo prazo de `GRADE_REQUEST_DAYS_AFTER` dias para perguntar a nota.
+
+## WhatsApp (avisos de alta prioridade)
+
+O EVA manda no WhatsApp **so** o que e de alta prioridade (prova, prazo final, edital, matricula, cancelado/adiado, urgente): alertas urgentes, lembretes de prazo (um por item a cada rodada, o mais proximo) e mudancas nesses itens. O resto continua so por e-mail.
+
+Usa a Cloud API da Meta com **template aprovado** (texto livre falha em silencio fora da janela de 24h). Preencha no `.env`:
+
+```text
+WHATSAPP_API_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_TO=5564999999999
+WHATSAPP_TEMPLATE_NAME=aviso_bot
+WHATSAPP_TEMPLATE_LANGUAGE=pt_BR
+WHATSAPP_TEMPLATE_PARAMS="EVA (faculdade)|{mensagem}"
+```
+
+`WHATSAPP_TEMPLATE_PARAMS` lista o valor de cada variavel do template, separadas por `|`; `{mensagem}` vira o texto do aviso. Teste com:
+
+```powershell
+python -m bot_faculdade whatsapp-test
+```
+
+A API aceitar a mensagem nao garante a entrega: confira se ela chegou no celular.
+
 ## Agendar no Windows
 
 Depois que o `.env` estiver configurado e um teste funcionar, crie uma tarefa no Agendador de Tarefas do Windows para rodar diariamente:
@@ -320,6 +396,14 @@ Iniciar em:
 ```text
 F:\INTELIGÊNCIA ARTIFICIAL\EVA
 ```
+
+Ou use o script pronto, que ja cria as tarefas rodando em segundo plano (sem abrir janela):
+
+```powershell
+.\scripts\install_windows_tasks.ps1 -InstallDashboard -InstallWeeklyReport
+```
+
+Isso cria: sync a cada 30 minutos (e no login), dashboard local sempre ativo, e o resumo semanal de faltas/medias toda sexta-feira as 08:00.
 
 ## Ajuste do SIGAA
 

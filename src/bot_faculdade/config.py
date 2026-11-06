@@ -63,6 +63,17 @@ class Settings:
     study_material_extensions: tuple[str, ...]
     telegram_bot_token: str
     telegram_chat_id: str
+    grade_formulas_path: Path
+    grade_request_days_after: int
+    grade_followup_days_after: int
+    current_semester_stale_days: int
+    whatsapp_api_token: str
+    whatsapp_phone_number_id: str
+    whatsapp_to: str
+    whatsapp_template_name: str
+    whatsapp_template_language: str
+    whatsapp_template_params: tuple[str, ...]
+    whatsapp_api_version: str
 
 
 def load_settings() -> Settings:
@@ -147,4 +158,18 @@ def load_settings() -> Settings:
         ),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        grade_formulas_path=_path(os.getenv("GRADE_FORMULAS_PATH", "config/grade_formulas.json")),
+        grade_request_days_after=int(os.getenv("GRADE_REQUEST_DAYS_AFTER", "7")),
+        grade_followup_days_after=int(os.getenv("GRADE_FOLLOWUP_DAYS_AFTER", "7")),
+        current_semester_stale_days=int(os.getenv("CURRENT_SEMESTER_STALE_DAYS", "10")),
+        whatsapp_api_token=os.getenv("WHATSAPP_API_TOKEN", ""),
+        whatsapp_phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", ""),
+        whatsapp_to=os.getenv("WHATSAPP_TO", ""),
+        whatsapp_template_name=os.getenv("WHATSAPP_TEMPLATE_NAME", ""),
+        whatsapp_template_language=os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "pt_BR"),
+        whatsapp_template_params=tuple(
+            param.strip() for param in os.getenv("WHATSAPP_TEMPLATE_PARAMS", "{mensagem}").split("|") if param.strip()
+        )
+        or ("{mensagem}",),
+        whatsapp_api_version=os.getenv("WHATSAPP_API_VERSION", "v21.0"),
     )
